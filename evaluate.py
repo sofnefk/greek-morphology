@@ -1,28 +1,34 @@
+import csv
 import unicodedata
 from collections import defaultdict
 
 import spacy
 
 MODELS = ["el_core_news_sm", "el_core_news_lg"]
+TEST_FILE = "data/test_set.csv"
 
 
 def nfc(s):
-    return unicodedata.normalize("NFC", s).lower()
+    """Unicode NFC only. Keeps case. This is what the model sees."""
+    return unicodedata.normalize("NFC", s).strip()
 
 
-# (sentence, target word, set of ACCEPTED lemmas, type)
-TEST_SET = [
-    ("Τα παιδιά παίζουν έξω.",    "παίζουν",   {"παίζω"},             "regular"),
-    ("Τρέχουμε κάθε πρωί.",       "τρέχουμε",  {"τρέχω"},             "regular"),
-    ("Διαβάζεις πολύ.",           "διαβάζεις", {"διαβάζω"},           "regular"),
-    ("Έγραψα ένα μήνυμα.",        "έγραψα",    {"γράφω"},             "stem_change"),
-    ("Πήρα το βιβλίο.",           "πήρα",      {"παίρνω", "πάρω"},    "stem_change"),
-    ("Βρήκα τα κλειδιά.",         "βρήκα",     {"βρίσκω"},            "stem_change"),
-    ("Εγώ έφαγα ψωμί.",           "έφαγα",     {"τρώω", "τρώγω"},     "suppletive"),
-    ("Μου είπε την αλήθεια.",     "είπε",      {"λέω", "λέγω"},       "suppletive"),
-    ("Είδα μια ταινία χθες.",     "είδα",      {"βλέπω"},             "suppletive"),
-    ("Ήρθε στο σπίτι μας.",       "ήρθε",      {"έρχομαι"},           "suppletive"),
-]
+def norm(s):
+    """NFC + lowercase. ONLY for comparing strings, never for model input."""
+    return nfc(s).lower()
+
+
+def load_test_set(path):
+    rows = []
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            row["accepted"] = {norm(x) for x in row["accepted_lemmas"].split("|")}
+            rows.append(row)
+    return rows
+
+
+test_set = load_test_set(TEST_FILE)
+print(f"Loaded {len(test_set)} test rows")
 
 for model_name in MODELS:
     try:
@@ -33,23 +39,32 @@ for model_name in MODELS:
 
     print(f"\n===== {model_name} =====")
     correct = defaultdict(int)
+    unchanged = defaultdict(int)
     total = defaultdict(int)
 
-    for sentence, target, accepted, kind in TEST_SET:
-        doc = nlp(nfc(sentence))
+    for row in test_set:
+        doc = nlp(nfc(row["sentence"]))
         predicted, pos = None, None
         for token in doc:
-            if nfc(token.text) == nfc(target):
-                predicted, pos = nfc(token.lemma_), token.pos_
+            if norm(token.text) == norm(row["target"]):
+                predicted, pos = norm(token.lemma_), token.pos_
                 break
 
+        if predicted is None:
+            print(f"WARNING: target '{row['target']}' not found in its sentence")
+            continue
+
+        kind = row["type"]
         total[kind] += 1
-        ok = predicted in {nfc(a) for a in accepted}
+        ok = predicted in row["accepted"]
+        same = predicted == norm(row["target"])
         if ok:
             correct[kind] += 1
-        print(f"{'OK ' if ok else 'ERR'} {target:<10} model={predicted:<10} pos={pos}")
+        if same:
+            unchanged[kind] += 1
+        print(f"{'OK ' if ok else 'ERR'} {row['target']:<12} model={predicted:<12} pos={pos}")
 
-    print("--- accuracy ---")
+    print("--- accuracy | returned unchanged ---")
     for kind in total:
         pct = 100 * correct[kind] / total[kind]
-        print(f"{kind:<12} {correct[kind]}/{total[kind]} ({pct:.0f}%)")
+        print(f"{kind:<12} {correct[kind]}/{total[kind]} ({pct:.0f}%) | unchanged: {unchanged[kind]}/{total[kind]}")
