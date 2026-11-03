@@ -6,16 +6,20 @@ import spacy
 
 MODELS = ["el_core_news_sm", "el_core_news_lg"]
 TEST_FILE = "data/test_set.csv"
+VERBOSE = False  # set True to print every row
 
 
 def nfc(s):
-    """Unicode NFC only. Keeps case. This is what the model sees."""
+    """Unicode NFC only. Keeps case."""
     return unicodedata.normalize("NFC", s).strip()
 
 
 def norm(s):
-    """NFC + lowercase. ONLY for comparing strings, never for model input."""
+    """NFC + lowercase. Always used for comparing strings."""
     return nfc(s).lower()
+
+
+CONDITIONS = {"keep_case": nfc, "lowercase": norm}
 
 
 def load_test_set(path):
@@ -37,34 +41,38 @@ for model_name in MODELS:
         print(f"\n!! {model_name} not installed, skipping")
         continue
 
-    print(f"\n===== {model_name} =====")
-    correct = defaultdict(int)
-    unchanged = defaultdict(int)
-    total = defaultdict(int)
+    for cond_name, prep in CONDITIONS.items():
+        correct = defaultdict(int)
+        unchanged = defaultdict(int)
+        not_verb = defaultdict(int)
+        total = defaultdict(int)
 
-    for row in test_set:
-        doc = nlp(nfc(row["sentence"]))
-        predicted, pos = None, None
-        for token in doc:
-            if norm(token.text) == norm(row["target"]):
-                predicted, pos = norm(token.lemma_), token.pos_
-                break
+        for row in test_set:
+            doc = nlp(prep(row["sentence"]))
+            predicted, pos = None, None
+            for token in doc:
+                if norm(token.text) == norm(row["target"]):
+                    predicted, pos = norm(token.lemma_), token.pos_
+                    break
 
-        if predicted is None:
-            print(f"WARNING: target '{row['target']}' not found in its sentence")
-            continue
+            if predicted is None:
+                print(f"WARNING: '{row['target']}' not found in its sentence")
+                continue
 
-        kind = row["type"]
-        total[kind] += 1
-        ok = predicted in row["accepted"]
-        same = predicted == norm(row["target"])
-        if ok:
-            correct[kind] += 1
-        if same:
-            unchanged[kind] += 1
-        print(f"{'OK ' if ok else 'ERR'} {row['target']:<12} model={predicted:<12} pos={pos}")
+            kind = row["type"]
+            total[kind] += 1
+            ok = predicted in row["accepted"]
+            correct[kind] += ok
+            unchanged[kind] += predicted == norm(row["target"])
+            not_verb[kind] += pos != "VERB"
+            if VERBOSE:
+                print(f"{'OK ' if ok else 'ERR'} {row['target']:<12} -> {predicted:<12} {pos}")
 
-    print("--- accuracy | returned unchanged ---")
-    for kind in total:
-        pct = 100 * correct[kind] / total[kind]
-        print(f"{kind:<12} {correct[kind]}/{total[kind]} ({pct:.0f}%) | unchanged: {unchanged[kind]}/{total[kind]}")
+        print(f"\n===== {model_name} | {cond_name} =====")
+        for kind in total:
+            n = total[kind]
+            print(
+                f"{kind:<12} correct {correct[kind]}/{n} ({100*correct[kind]/n:.0f}%)"
+                f" | unchanged {unchanged[kind]}/{n}"
+                f" | not VERB {not_verb[kind]}/{n}"
+            )
